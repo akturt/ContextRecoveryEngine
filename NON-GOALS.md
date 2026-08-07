@@ -9,6 +9,9 @@ This project is NOT:
 - Workflow Engine
 - Documentation Generator
 - Architecture Framework
+- Knowledge Governance Runtime
+- Backlog Manager
+- Registry / Bootstrap
 
 It only recovers engineering context.
 

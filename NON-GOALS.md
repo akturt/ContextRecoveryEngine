@@ -12,6 +12,17 @@ This project is NOT:
 - Knowledge Governance Runtime
 - Backlog Manager
 - Registry / Bootstrap
+- Design System
+- Discovery Layer
+- Feature Candidates
+- Legacy Investigation
+- Knowledge Router
+- Entry Points (managed)
+- Design Drift
+- Documentation Governance
+- Knowledge Lifecycle
+- Active / Archive Backlog
+- Agent Runtime
 
 It only recovers engineering context.
 

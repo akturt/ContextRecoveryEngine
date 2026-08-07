@@ -1,6 +1,6 @@
 # Context Recovery Engine
 
-**Статус:** спецификация продукта, редакция v4 (Knowledge Producer, Finding Classification, границы ответственности, аудит)
+**Статус:** спецификация продукта, редакция v5 (двухуровневая классификация Finding, усиленный контракт Scanner, расширенные границы)
 **Событие:** DataHub AI Hackathon
 **Репозиторий:** https://github.com/akturt/ContextRecoveryEngine (origin/master)
 
@@ -8,7 +8,7 @@
 
 Context Recovery Engine (CRE) — новый open-source инструмент, который за две минуты восстанавливает инженерный контекст произвольного Git-репозитория и публикует его в DataHub. Вход — код и документация проекта. Выход — машиночитаемое описание того, из чего система состоит, какие сущности оперирует и на каких основаниях приняты её ключевые решения.
 
-Редакция v4 фиксирует CRE как **Knowledge Producer** в чистой модели экосистемы знаний, вводит внутреннюю концепцию `Finding` и её классификацию (`kind`), уточняет границы ответственности и добавляет архитектурный аудит границ продукта. Главное правило разработки неизменно: любой новый файл создается, только если он вызывается в демонстрации `cre recover → publish → DataHub`.
+Редакция v5 вводит двухуровневую классификацию: Scanner назначает `Finding` техническую категорию происхождения (`category`), а Recovery — архитектурный тип (`kind`). Контракт Scanner усилен: он производит только наблюдения и не делает выводов. Границы ответственности расширены явным списком всего, что относится к Knowledge Governance и остаётся вне CRE. Главное правило разработки неизменно: любой новый файл создается, только если он вызывается в демонстрации `cre recover → publish → DataHub`.
 
 ## 2. Проблема
 
@@ -102,11 +102,11 @@ CRE = Knowledge Producer. DataHub = Knowledge Repository. LLM/IDE/MCP = Knowledg
 Конвейер содержит пять шагов; наружу показываются преобразования данных от факта к классифицированному объекту.
 
 ```
-Repository → Scanner → Finding → Recovery (Classification) → Context Model → Adapters
+Repository → Scanner → Finding(category) → Recovery → Context Object(kind) → Context Model → Adapters
 ```
 
-- **Scanner** — детерминированный анализ репозитория без LLM. Результат — список сырых `Finding` (фактов), каждый с Evidence. Scanner не знает, является ли факт сущностью, решением или ограничением.
-- **Recovery** — классификация `Finding` в LLM: каждому находится `kind` (architecture / entity / decision / constraint / relationship), затем строится Context Model. Никакой дополнительной логики сверх классификации и заполнения полей.
+- **Scanner** — детерминированный анализ репозитория без LLM. Извлекает только наблюдаемые факты — `Finding`. Scanner не делает выводов: он не определяет Entity, Component, Relationship, ADR или Constraint и не выполняет Recovery. Каждый `Finding` несёт техническую категорию происхождения (`category`) и `evidence`, но не интерпретацию.
+- **Recovery** — классификация `Finding` в LLM. Recovery назначает каждому `Finding` архитектурный `kind` (architecture / entity / decision / constraint / relationship) — это вторая, независимая стадия классификации — и строит Context Model. Никакой дополнительной логики сверх классификации и заполнения полей.
 - **Context Model** — `context.json`, реализующий контракт раздела 5.
 - **Adapters** — сериализация Context Model. JSON и DataHub — первичные; Markdown — бонус; MCP — тот же уровень. Recovery не знает ни про один адаптер.
 
@@ -114,24 +114,58 @@ Repository → Scanner → Finding → Recovery (Classification) → Context Mod
 
 ## 8. Scanner
 
-Scanner — главная воспроизводимая часть продукта и его ключевая фишка. Он работает без LLM и извлекает детерминированные факты:
+Scanner — главная воспроизводимая часть продукта и его ключевая фишка. Он работает без LLM и производит **только факты**.
+
+Формальный контракт Scanner:
+
+> Scanner никогда не делает выводов.
+> Scanner производит только наблюдения.
+
+`Finding` — это наблюдение, а не сущность. Примеры корректных `Finding`:
 
 ```
-Language          Framework         Dependencies
-Repository Structure  Entry Points     Build System
-CI                Docs              Git Metadata
-Package Managers  Configuration
+package.json содержит fastapi
+README содержит "hexagonal architecture"
+есть каталог app/domain
+есть импорт sqlalchemy
+docker-compose содержит postgres
 ```
 
-Результат — список `Finding` (сырых фактов), каждый с обязательным полем `evidence` (ссылка на место в репозитории). Отсутствие LLM делает сканер дешевым, воспроизводимым и пригодным для многократных прогонов при отладке восстановления.
+Scanner не производит `Architecture`, `Aggregate`, `Capability`, `ADR` и тому подобное — это уже ответственность Recovery.
+
+`Finding` обязан содержать:
+
+- `id` — уникальный идентификатор находки;
+- `category` — техническая категория происхождения (первый уровень классификации);
+- `evidence` — ссылка на место в репозитории;
+- `source` — файл/коммит/узел, из которого извлечено;
+- `payload` — сырые данные наблюдения.
+
+`Finding` не содержит интерпретации.
+
+Категории `category` (НЕ архитектурные):
+
+- `code`
+- `configuration`
+- `dependency`
+- `documentation`
+- `filesystem`
+- `vcs`
+
+Отсутствие LLM делает сканер дешевым, воспроизводимым и пригодным для многократных прогонов при отладке восстановления.
 
 ## 9. Recovery
 
 Recovery намеренно примитивен.
 
 ```
-Scanner → Finding[] → LLM → Context Objects (kind + evidence + confidence)
+Scanner → Finding[](category) → LLM → Context Object[](kind + evidence + confidence)
 ```
+
+Две независимые стадии классификации:
+
+1. **Техническая категория** (`category`) — назначается Scanner на этапе извлечения (code / configuration / dependency / documentation / filesystem / vcs). Это свойство происхождения, а не смысла.
+2. **Архитектурный тип** (`kind`) — назначается Recovery на этапе интерпретации (architecture / entity / decision / constraint / relationship).
 
 LLM получает сырые `Finding` и по контракту (раздел 5) назначает каждому `kind` и восстанавливает содержимое Components, Relationships, ADR-кандидатов, Entities, Constraints, снабжая каждый объект полями Evidence и Confidence. Никаких промежуточных этапов, классификаторов или оркестрации. Недостаток данных — повод завершить восстановление конкретной сущности с явным логом, а не подменять результат.
 
@@ -141,7 +175,7 @@ LLM получает сырые `Finding` и по контракту (разде
 
 ```
 Context
-├── findings[]                 # сырые факты от сканера (evidence обязателен)
+├── findings[]                 # сырые наблюдения от сканера: id, category, evidence, source, payload
 ├── Architecture
 │   ├── components              # kind: architecture
 │   └── relationships           # kind: relationship (dependency graph)
@@ -193,28 +227,31 @@ cre publish    # адаптер DataHub
 CRE отвечает только за производство канонического контекста. Явная граница ответственности:
 
 **CRE отвечает за:**
-- deterministic repository scanning;
-- recovery инженерного контекста;
-- canonical context model;
-- evidence collection;
-- classification найденных объектов (`kind`);
-- export (Markdown / JSON / DataHub).
+- детерминированное сканирование репозитория (Scanner);
+- восстановление инженерного контекста (Recovery);
+- каноническую модель контекста;
+- сбор доказательств (evidence);
+- первичную классификацию находок по технической категории (`category`);
+- вторичную классификацию объектов по архитектурному типу (`kind`);
+- экспорт (Markdown / JSON / DataHub).
 
-**CRE НЕ отвечает за:**
+CRE НЕ отвечает ни за одну из следующих вещей. Все они относятся к **Knowledge Governance**, а не к **Knowledge Production**, и сознательно оставлены вне CRE:
+
+- Design System;
+- Discovery Layer;
+- Backlog (включая Active/Archive backlog);
+- Feature Candidates;
+- Legacy Investigation;
+- Knowledge Router;
 - Runtime;
-- Knowledge Lifecycle;
-- Documentation Governance;
-- Backlog Management;
-- Documentation Drift;
-- Reality Engine;
-- Registry;
 - Bootstrap;
-- Project Templates;
-- Agent Runtime;
-- SOP;
-- Knowledge Routing после восстановления.
+- Entry Points (managed);
+- Design Drift;
+- Documentation Governance;
+- Knowledge Lifecycle;
+- Agent Runtime.
 
-Следующие идеи смежных систем сознательно оставлены вне CRE: Design System (знание после восстановления), Managed Entry Points (Runtime), Legacy Investigation (интерпретация, а не факт), Feature Candidates как документ (допустим только как выключенный тип находки `potential_capability`), Backlog Evolution, Design Drift, Knowledge Router (управляет знанием, а не производит его).
+Если начать переносить отсюда, например, Discovery Layer, то через неделю после хакатона снова придётся разделять продукты. Поэтому полный список выше остаётся исключительно на стороне Underboss как Knowledge Governance Runtime (раздел 26).
 
 ## 15. NON-GOALS
 
@@ -232,6 +269,17 @@ This project is NOT:
 - Knowledge Governance Runtime
 - Backlog Manager
 - Registry / Bootstrap
+- Design System
+- Discovery Layer
+- Feature Candidates
+- Legacy Investigation
+- Knowledge Router
+- Entry Points (managed)
+- Design Drift
+- Documentation Governance
+- Knowledge Lifecycle
+- Active / Archive Backlog
+- Agent Runtime
 
 It only recovers engineering context.
 ```
@@ -320,65 +368,105 @@ DataHub Adapter (M3) — первая задача второго дня, пос
 Ты Principal Software Architect.
 
 Контекст.
-Проект Context Recovery Engine (CRE) выделяется из Underboss в самостоятельный open-source продукт для DataHub AI Hackathon.
 
-Главная цель аудита — не улучшить архитектуру, а проверить, не нарушены ли границы ответственности между CRE и Underboss.
+Разрабатывается Context Recovery Engine (CRE) — самостоятельный open-source продукт для DataHub AI Hackathon.
 
-Исходный принцип:
-CRE = Knowledge Producer
-Underboss = Knowledge Governance Runtime
+CRE является исключительно Knowledge Producer.
 
-CRE отвечает только за:
-- deterministic repository scanning;
-- recovery инженерного контекста;
-- canonical context model;
-- evidence collection;
-- classification найденных объектов;
-- export (Markdown / JSON / DataHub).
+Он НЕ является частью Underboss Runtime и не должен наследовать его архитектуру.
 
-CRE НЕ отвечает за:
-- Runtime;
-- Knowledge Lifecycle;
-- Documentation Governance;
-- Backlog Management;
-- Documentation Drift;
-- Reality Engine;
-- Registry;
-- Bootstrap;
-- Project Templates;
-- Agent Runtime;
-- SOP;
-- Knowledge Routing после восстановления.
+Во время анализа были рассмотрены несколько идей, возникших при эксплуатации Underboss (Discovery Layer, Feature Candidates, Legacy Investigation, Knowledge Routing, Design System и др.).
 
 Задача.
-Проведи полный архитектурный аудит спецификации.
 
-Для каждого раздела ответь:
-1. Не произошло ли повторного затягивания Underboss внутрь CRE?
-2. Нет ли ответственности, которая должна остаться в Underboss?
-3. Нет ли абстракций, которые не нужны для MVP?
-4. Какие части можно удалить без ухудшения демонстрации?
-5. Есть ли скрытые признаки framework-thinking?
+Проведи минимальное уточнение спецификации CRE.
 
-Особенно проверить:
-- Discovery Pipeline
-- Canonical Context Model
-- Export Layer
-- Finding Classification
-- Evidence
-- CLI
-- DataHub Adapter
+Главная цель — усилить архитектурную границу между Scanner и Recovery, не расширяя scope продукта.
 
-Для каждого замечания используй категории:
-CRITICAL / HIGH / MEDIUM / OPTIONAL
+Не добавляй новые функции.
+Не добавляй Runtime.
+Не добавляй Knowledge Governance.
+Не добавляй Discovery Layer.
+Не добавляй Backlog.
+Не добавляй Feature Candidates.
+Не добавляй Legacy Investigation.
+Не добавляй Design System.
+Не добавляй Knowledge Router.
 
-Главный критерий аудита:
-Через неделю после хакатона CRE должен импортироваться в Underboss как библиотека Recovery Module практически без концептуальных изменений.
-Если какой-либо раздел мешает этому — считать его архитектурной ошибкой.
+Разрешается внести только два изменения.
 
-Не предлагай новые функции.
-Не расширяй scope.
-Главная цель — уменьшить продукт до минимальной законченной формы.
+1. Усилить контракт Scanner.
+
+Scanner должен быть формально определён как источник исключительно детерминированных наблюдений (Findings).
+
+Scanner не имеет права:
+- делать архитектурные выводы;
+- определять Entity;
+- определять Component;
+- определять Relationship;
+- определять ADR;
+- определять Constraints;
+- выполнять Recovery.
+
+Scanner только извлекает наблюдаемые факты.
+
+Каждый Finding обязан содержать:
+- уникальный идентификатор;
+- category;
+- evidence;
+- source;
+- payload.
+
+Finding не содержит интерпретации.
+
+2. Усилить модель Finding.
+
+Ввести первую стадию классификации.
+
+Finding получает только техническую категорию происхождения.
+
+Минимальный набор:
+- code
+- configuration
+- dependency
+- documentation
+- filesystem
+- vcs
+
+Это НЕ архитектурная классификация.
+
+Архитектурная классификация (architecture/entity/relationship/decision/constraint) остаётся исключительно ответственностью Recovery.
+
+Таким образом появляются две независимые стадии:
+
+Repository
+    ↓
+Scanner
+    ↓
+Finding(category)
+    ↓
+Recovery
+    ↓
+Context Object(kind)
+
+Это разделение должно быть явно отражено в спецификации.
+
+Требования.
+
+- Не менять философию продукта.
+- Не менять публичный CLI.
+- Не менять Canonical Context Model.
+- Не добавлять новые этапы Pipeline.
+- Не увеличивать объём MVP.
+- Не вводить новые каталоги.
+- Не создавать новых адаптеров.
+- Не использовать терминологию Underboss.
+
+После изменений проверь, что через неделю после хакатона CRE можно импортировать в Underboss как Recovery Module без изменения архитектурной модели.
+
+Любое изменение, которое усиливает зависимость CRE от Underboss или Knowledge Governance, считать архитектурной ошибкой и отклонить.
+
+Итоговый вывод: из всех наработок Underboss в CRE стоит перенести только усиление границы Scanner ↔ Recovery и более строгую модель Finding. Всё остальное снижает чистоту архитектуры продукта и противоречит его заявленной роли Knowledge Producer.
 ```
 
 ## 24. Open Questions
@@ -412,6 +500,8 @@ Private R&D → породил идею → Context Recovery Engine → DataHub
 R&D-система выступает **донором алгоритмов, а не донором архитектуры**: берутся идеи и конкретные проверенные алгоритмы (детерминированный сбор зависимостей, инвентаризация сущностей), вся инфраструктура остается в R&D-системе. В первые шесть часов работы репозиторий донора не просматривается, чтобы не начать строить его заново.
 
 **Критерий правильности границы.** Если через неделю репозиторий CRE можно удалить, импортировать как библиотеку в R&D-систему и не менять ничего концептуально — архитектура верна. Если для этого потребуется переносить Runtime, Registry, Bootstrap или другие подсистемы — граница проведена слишком широко. Цель — CRE как самостоятельный продукт, а не «Underboss Lite».
+
+К Underboss как Knowledge Governance Runtime относится всё остальное, что CRE знать не должен: Discovery Layer, Knowledge Routing, Feature Candidates, Legacy Investigation, Reality Engine, Documentation Drift, Design Drift, Knowledge Governance, Backlog, Knowledge Lifecycle. Именно эти вещи — причина существования Underboss; перенос любой из них в CRE разрушает чистоту границы Knowledge Producer.
 
 ## 27. Оценка состояния
 
